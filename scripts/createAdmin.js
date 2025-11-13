@@ -11,7 +11,7 @@ const createAdmin = async () => {
     });
     console.log("📦 Connected to MongoDB");
 
-    const adminEmail = "admin@southbrews.com";
+    const adminEmail = "admin@southsidebrews.com";
     const adminPassword = "admin123";
 
     // Check if admin already exists
