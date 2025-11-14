@@ -296,47 +296,62 @@ reservationSchema.statics.checkAvailability = async function (
   time,
   partySize
 ) {
-  const [hours, minutes] = time.split(":").map(Number);
-  const startDateTime = new Date(date);
-  startDateTime.setHours(hours, minutes, 0, 0);
+  // Normalize the date to start of day
+  const reservationDate = new Date(date);
+  reservationDate.setHours(0, 0, 0, 0);
 
-  // Check for overlapping reservations (considering typical dining duration of 90 minutes)
-  const endDateTime = new Date(startDateTime);
-  endDateTime.setMinutes(endDateTime.getMinutes() + 90);
+  const nextDay = new Date(reservationDate);
+  nextDay.setDate(nextDay.getDate() + 1);
 
-  const conflictingReservations = await this.find({
+  // Get all reservations for that day with conflicting status
+  const existingReservations = await this.find({
     date: {
-      $gte: new Date(date.setHours(0, 0, 0, 0)),
-      $lt: new Date(date.setHours(23, 59, 59, 999)),
+      $gte: reservationDate,
+      $lt: nextDay,
     },
-    status: { $in: ["confirmed", "seated"] },
-    $or: [
-      {
-        // Existing reservation starts during our time slot
-        $expr: {
-          $and: [
-            {
-              $gte: [
-                { $dateFromString: { dateString: "$time" } },
-                startDateTime,
-              ],
-            },
-            {
-              $lt: [{ $dateFromString: { dateString: "$time" } }, endDateTime],
-            },
-          ],
-        },
-      },
-      // Add more complex overlap logic as needed
-    ],
+    status: { $in: ["pending", "confirmed", "seated"] },
   });
 
-  // Simple availability check - can be enhanced with actual table capacity logic
+  // Parse the requested time
+  const [requestedHours, requestedMinutes] = time.split(":").map(Number);
+  const requestedTimeInMinutes = requestedHours * 60 + requestedMinutes;
+
+  // Check for time slot conflicts (90-minute dining window)
+  const DINING_DURATION = 90; // minutes
+
+  for (const reservation of existingReservations) {
+    const [existingHours, existingMinutes] = reservation.time
+      .split(":")
+      .map(Number);
+    const existingTimeInMinutes = existingHours * 60 + existingMinutes;
+
+    // Check if times overlap (considering 90-minute duration)
+    const requestedStart = requestedTimeInMinutes;
+    const requestedEnd = requestedTimeInMinutes + DINING_DURATION;
+    const existingStart = existingTimeInMinutes;
+    const existingEnd = existingTimeInMinutes + DINING_DURATION;
+
+    // If times overlap, check capacity
+    if (
+      (requestedStart >= existingStart && requestedStart < existingEnd) ||
+      (requestedEnd > existingStart && requestedEnd <= existingEnd) ||
+      (requestedStart <= existingStart && requestedEnd >= existingEnd)
+    ) {
+      // Times overlap - you can add more sophisticated logic here
+      // For now, we'll use a simple capacity check
+    }
+  }
+
+  // Simple availability check based on total capacity
   const maxCapacity = 50; // Total restaurant capacity
-  const reservedCapacity = conflictingReservations.reduce(
-    (total, res) => total + res.partySize,
-    0
-  );
+  const reservedCapacity = existingReservations
+    .filter((res) => {
+      const [resHours, resMinutes] = res.time.split(":").map(Number);
+      const resTimeInMinutes = resHours * 60 + resMinutes;
+      const timeDiff = Math.abs(resTimeInMinutes - requestedTimeInMinutes);
+      return timeDiff < DINING_DURATION; // Within dining window
+    })
+    .reduce((total, res) => total + res.partySize, 0);
 
   return reservedCapacity + partySize <= maxCapacity;
 };

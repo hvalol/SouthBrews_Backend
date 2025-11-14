@@ -143,6 +143,30 @@ const validateReservation = [
     .isInt({ min: 1, max: 12 })
     .withMessage("Party size must be between 1 and 12 people"),
 
+  body("contactInfo.phone")
+    .notEmpty()
+    .withMessage("Contact phone is required")
+    .matches(/^\+?[\d\s\-\(\)]+$/)
+    .withMessage("Please provide a valid phone number"),
+
+  body("contactInfo.email")
+    .notEmpty()
+    .withMessage("Contact email is required")
+    .isEmail()
+    .withMessage("Please provide a valid email address"),
+
+  body("occasion")
+    .optional()
+    .isIn([
+      "birthday",
+      "anniversary",
+      "date",
+      "business",
+      "celebration",
+      "other",
+    ])
+    .withMessage("Invalid occasion type"),
+
   body("specialRequests")
     .optional()
     .isLength({ max: 500 })

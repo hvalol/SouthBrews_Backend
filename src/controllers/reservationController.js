@@ -1,5 +1,6 @@
 const Reservation = require("../models/Reservation");
 const User = require("../models/User");
+const emailService = require("../utils/emailService");
 
 // @desc    Create new reservation
 // @route   POST /api/reservations
@@ -52,6 +53,14 @@ const createReservation = async (req, res, next) => {
     // Add loyalty points for making reservation
     const user = await User.findById(req.user.id);
     await user.addLoyaltyPoints(10);
+
+    // Send confirmation email
+    try {
+      await emailService.sendReservationConfirmation(reservation);
+    } catch (emailError) {
+      console.error("Failed to send confirmation email:", emailError);
+      // Don't fail the reservation if email fails
+    }
 
     res.status(201).json({
       status: "success",
@@ -279,6 +288,14 @@ const cancelReservation = async (req, res, next) => {
 
     // Use the model method to cancel
     await reservation.cancel(reason, req.user.id);
+
+    // Send cancellation email
+    try {
+      await emailService.sendReservationCancellation(reservation);
+    } catch (emailError) {
+      console.error("Failed to send cancellation email:", emailError);
+      // Don't fail the cancellation if email fails
+    }
 
     res.status(200).json({
       status: "success",
@@ -617,6 +634,223 @@ const getReservationStats = async (req, res, next) => {
   }
 };
 
+// @desc    Send reminder email for reservation
+// @route   POST /api/reservations/:id/send-reminder
+// @access  Private/Admin/Staff
+const sendReminderEmail = async (req, res, next) => {
+  try {
+    const reservation = await Reservation.findById(req.params.id);
+
+    if (!reservation) {
+      return res.status(404).json({
+        status: "error",
+        message: "Reservation not found",
+      });
+    }
+
+    // Check if reservation is in valid status
+    if (!["pending", "confirmed"].includes(reservation.status)) {
+      return res.status(400).json({
+        status: "error",
+        message: `Cannot send reminder for ${reservation.status} reservation`,
+      });
+    }
+
+    // Check if reservation is in the future
+    const reservationDateTime = new Date(
+      `${reservation.date.toISOString().split("T")[0]}T${reservation.time}`
+    );
+    if (reservationDateTime < new Date()) {
+      return res.status(400).json({
+        status: "error",
+        message: "Cannot send reminder for past reservation",
+      });
+    }
+
+    // Send reminder email
+    await emailService.sendReservationReminder(reservation);
+
+    res.status(200).json({
+      status: "success",
+      message: "Reminder email sent successfully",
+    });
+  } catch (error) {
+    console.error("Send reminder email error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to send reminder email",
+      ...(process.env.NODE_ENV === "development" && { error: error.message }),
+    });
+  }
+};
+
+// @desc    Mark reservation as no-show
+// @route   PATCH /api/reservations/:id/no-show
+// @access  Private/Admin/Staff
+const markNoShow = async (req, res, next) => {
+  try {
+    const reservation = await Reservation.findById(req.params.id);
+
+    if (!reservation) {
+      return res.status(404).json({
+        status: "error",
+        message: "Reservation not found",
+      });
+    }
+
+    // Can only mark confirmed or seated reservations as no-show
+    if (!["confirmed", "seated"].includes(reservation.status)) {
+      return res.status(400).json({
+        status: "error",
+        message: `Cannot mark ${reservation.status} reservation as no-show`,
+      });
+    }
+
+    reservation.status = "no-show";
+    reservation.notes.push({
+      content: `Marked as no-show by ${req.user.role}`,
+      addedBy: req.user.id,
+    });
+
+    await reservation.save();
+    await reservation.populate("user", "firstName lastName email phone");
+
+    res.status(200).json({
+      status: "success",
+      message: "Reservation marked as no-show",
+      data: {
+        reservation,
+      },
+    });
+  } catch (error) {
+    console.error("Mark no-show error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to mark reservation as no-show",
+      ...(process.env.NODE_ENV === "development" && { error: error.message }),
+    });
+  }
+};
+
+// @desc    Get today's reservations
+// @route   GET /api/reservations/today
+// @access  Private/Admin/Staff
+const getTodayReservations = async (req, res, next) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const reservations = await Reservation.find({
+      date: {
+        $gte: today,
+        $lt: tomorrow,
+      },
+    })
+      .populate("user", "firstName lastName email phone")
+      .sort({ time: 1 });
+
+    const stats = {
+      total: reservations.length,
+      pending: reservations.filter((r) => r.status === "pending").length,
+      confirmed: reservations.filter((r) => r.status === "confirmed").length,
+      seated: reservations.filter((r) => r.status === "seated").length,
+      completed: reservations.filter((r) => r.status === "completed").length,
+      cancelled: reservations.filter((r) => r.status === "cancelled").length,
+      noShow: reservations.filter((r) => r.status === "no-show").length,
+    };
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        reservations,
+        stats,
+        date: today.toISOString().split("T")[0],
+      },
+    });
+  } catch (error) {
+    console.error("Get today's reservations error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch today's reservations",
+      ...(process.env.NODE_ENV === "development" && { error: error.message }),
+    });
+  }
+};
+
+// @desc    Get available time slots for a date
+// @route   GET /api/reservations/available-slots
+// @access  Public
+const getAvailableSlots = async (req, res, next) => {
+  try {
+    const { date, partySize } = req.query;
+
+    if (!date || !partySize) {
+      return res.status(400).json({
+        status: "error",
+        message: "Date and party size are required",
+      });
+    }
+
+    const requestedDate = new Date(date);
+    const size = parseInt(partySize);
+
+    // Define available time slots (customize as needed)
+    const allSlots = [
+      "11:00",
+      "11:30",
+      "12:00",
+      "12:30",
+      "13:00",
+      "13:30",
+      "14:00",
+      "14:30",
+      "17:00",
+      "17:30",
+      "18:00",
+      "18:30",
+      "19:00",
+      "19:30",
+      "20:00",
+      "20:30",
+      "21:00",
+    ];
+
+    // Check availability for each slot
+    const availableSlots = [];
+    for (const slot of allSlots) {
+      const isAvailable = await Reservation.checkAvailability(
+        requestedDate,
+        slot,
+        size
+      );
+      if (isAvailable) {
+        availableSlots.push(slot);
+      }
+    }
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        date: date,
+        partySize: size,
+        availableSlots,
+        totalSlots: allSlots.length,
+        availableCount: availableSlots.length,
+      },
+    });
+  } catch (error) {
+    console.error("Get available slots error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch available slots",
+      ...(process.env.NODE_ENV === "development" && { error: error.message }),
+    });
+  }
+};
+
 module.exports = {
   createReservation,
   getMyReservations,
@@ -630,4 +864,8 @@ module.exports = {
   getAllReservations,
   checkAvailability,
   getReservationStats,
+  sendReminderEmail,
+  markNoShow,
+  getTodayReservations,
+  getAvailableSlots,
 };
