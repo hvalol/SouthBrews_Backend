@@ -1,6 +1,6 @@
 const MenuItem = require("../models/MenuItem");
 const Review = require("../models/Review");
-const { uploadImage, deleteImage } = require("../config/cloudinary");
+const { deleteImage } = require("../config/cloudinary");
 
 // @desc    Get all menu items with filtering, sorting, and pagination
 // @route   GET /api/menu
@@ -166,19 +166,26 @@ const getMenuItem = async (req, res, next) => {
 // @access  Private (Admin/Staff only)
 const createMenuItem = async (req, res, next) => {
   try {
+    console.log("📤 Create menu item request received");
+    console.log("Body:", req.body);
+    console.log("Cloudinary Result:", req.cloudinaryResult);
     console.log("========== CREATE MENU ITEM BACKEND ==========");
     console.log("📥 Request Body:", req.body);
     console.log("📥 Request File:", req.file);
 
+    // Convert FormData string booleans to actual booleans
+    if (typeof req.body.available === "string") {
+      req.body.available = req.body.available === "true";
+    }
+    if (typeof req.body.featured === "string") {
+      req.body.featured = req.body.featured === "true";
+    }
+
     // Handle image upload if provided
-    if (req.file) {
-      const imageResult = await uploadImage(
-        req.file.path,
-        "southside-brews/menu"
-      );
+    if (req.cloudinaryResult) {
       req.body.image = {
-        public_id: imageResult.public_id,
-        url: imageResult.url,
+        public_id: req.cloudinaryResult.public_id,
+        url: req.cloudinaryResult.secure_url || req.cloudinaryResult.url,
       };
     }
 
@@ -252,6 +259,10 @@ const createMenuItem = async (req, res, next) => {
 // @access  Private (Admin/Staff only)
 const updateMenuItem = async (req, res, next) => {
   try {
+    console.log("📝 Update menu item request received");
+    console.log("Item ID:", req.params.id);
+    console.log("Body:", req.body);
+    console.log("Cloudinary Result:", req.cloudinaryResult);
     let menuItem = await MenuItem.findById(req.params.id);
 
     if (!menuItem) {
@@ -261,20 +272,24 @@ const updateMenuItem = async (req, res, next) => {
       });
     }
 
+    // Convert FormData string booleans to actual booleans
+    if (typeof req.body.available === "string") {
+      req.body.available = req.body.available === "true";
+    }
+    if (typeof req.body.featured === "string") {
+      req.body.featured = req.body.featured === "true";
+    }
+
     // Handle image upload if provided
-    if (req.file) {
+    if (req.cloudinaryResult) {
       // Delete old image if exists
       if (menuItem.image && menuItem.image.public_id) {
         await deleteImage(menuItem.image.public_id);
       }
 
-      const imageResult = await uploadImage(
-        req.file.path,
-        "southside-brews/menu"
-      );
       req.body.image = {
-        public_id: imageResult.public_id,
-        url: imageResult.url,
+        public_id: req.cloudinaryResult.public_id,
+        url: req.cloudinaryResult.secure_url || req.cloudinaryResult.url,
       };
     }
 

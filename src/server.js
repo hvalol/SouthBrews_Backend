@@ -38,6 +38,9 @@ const reservationRoutes = require("./routes/reservations");
 const employeeRoutes = require("./routes/employeeRoutes");
 const shiftRoutes = require("./routes/shifts");
 const galleryRoutes = require("./routes/gallery");
+const userRoutes = require("./routes/users");
+const settingsRoutes = require("./routes/settings");
+const contactRoutes = require("./routes/contact");
 
 // API Routes
 app.use("/api/auth", authRoutes);
@@ -46,6 +49,9 @@ app.use("/api/reservations", reservationRoutes);
 app.use("/api/employees", employeeRoutes);
 app.use("/api/shifts", shiftRoutes);
 app.use("/api/gallery", galleryRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/contact", contactRoutes);
 
 // Health check route
 app.get("/api/health", (req, res) => {

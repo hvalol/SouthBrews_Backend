@@ -37,6 +37,8 @@ const sendTokenResponse = (user, statusCode, res, message) => {
           loyaltyTier: user.loyaltyTier,
           profileImage: user.profileImage,
           preferences: user.preferences,
+          favoriteMenuItems: user.favoriteMenuItems || [],
+          favoriteGalleryImages: user.favoriteGalleryImages || [],
         },
       },
     });
@@ -172,10 +174,14 @@ const logout = async (req, res, next) => {
 // @access  Private
 const getMe = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id).populate({
-      path: "orders",
-      options: { sort: { createdAt: -1 }, limit: 5 },
-    });
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        status: "error",
+        message: "User not found",
+      });
+    }
 
     res.status(200).json({
       status: "success",
@@ -197,6 +203,11 @@ const getMe = async (req, res, next) => {
           isEmailVerified: user.isEmailVerified,
           lastLogin: user.lastLogin,
           createdAt: user.createdAt,
+          favoriteMenuItems: user.favoriteMenuItems || [],
+          favoriteGalleryImages: user.favoriteGalleryImages || [],
+          address: user.address,
+          totalReservations: user.totalReservations,
+          totalReceipts: user.totalReceipts,
         },
       },
     });

@@ -1,5 +1,4 @@
 const express = require("express");
-const multer = require("multer");
 const {
   getMenuItems,
   getMenuItem,
@@ -21,21 +20,8 @@ const {
   optionalAuth,
 } = require("../middleware/auth");
 const { validateMenuItem } = require("../middleware/validation");
-
-// Configure multer for file uploads
-const upload = multer({
-  dest: "uploads/",
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Please upload an image file"), false);
-    }
-  },
-});
+const upload = require("../middleware/upload");
+const { uploadToCloudinary } = require("../middleware/upload");
 
 const router = express.Router();
 
@@ -52,8 +38,20 @@ router.use(protect);
 router.use(isStaff);
 
 router.get("/admin/stats", isAdmin, getMenuStats);
-router.post("/", upload.single("image"), validateMenuItem, createMenuItem);
-router.put("/:id", upload.single("image"), validateMenuItem, updateMenuItem);
+router.post(
+  "/",
+  upload.single("image"),
+  uploadToCloudinary("menu-items"),
+  validateMenuItem,
+  createMenuItem
+);
+router.put(
+  "/:id",
+  upload.single("image"),
+  uploadToCloudinary("menu-items"),
+  validateMenuItem,
+  updateMenuItem
+);
 router.patch("/:id/availability", toggleAvailability);
 
 // Admin only routes

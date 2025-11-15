@@ -102,6 +102,60 @@ const userSchema = new mongoose.Schema(
         },
       },
     },
+    favoriteMenuItems: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "MenuItem",
+      },
+    ],
+    favoriteGalleryImages: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Gallery",
+      },
+    ],
+    address: {
+      street: String,
+      city: String,
+      state: String,
+      zipCode: String,
+      country: {
+        type: String,
+        default: "USA",
+      },
+    },
+    pointsHistory: [
+      {
+        amount: {
+          type: Number,
+          required: true,
+        },
+        type: {
+          type: String,
+          enum: ["earned", "redeemed"],
+          required: true,
+        },
+        source: {
+          type: String,
+          enum: ["receipt", "reservation", "reward", "bonus"],
+          required: true,
+        },
+        description: String,
+        relatedId: mongoose.Schema.Types.ObjectId,
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+    totalReservations: {
+      type: Number,
+      default: 0,
+    },
+    totalReceipts: {
+      type: Number,
+      default: 0,
+    },
     isEmailVerified: {
       type: Boolean,
       default: false,
@@ -223,18 +277,80 @@ userSchema.methods.getResetPasswordToken = function () {
 };
 
 // Method to add loyalty points
-userSchema.methods.addLoyaltyPoints = function (points) {
+userSchema.methods.addLoyaltyPoints = async function (
+  points,
+  source,
+  description,
+  relatedId
+) {
   this.loyaltyPoints += points;
+
+  // Add to points history
+  this.pointsHistory.push({
+    amount: points,
+    type: "earned",
+    source: source || "bonus",
+    description: description || "Points earned",
+    relatedId: relatedId,
+    createdAt: new Date(),
+  });
+
   return this.save();
 };
 
 // Method to redeem loyalty points
-userSchema.methods.redeemLoyaltyPoints = function (points) {
-  if (this.loyaltyPoints >= points) {
-    this.loyaltyPoints -= points;
-    return this.save();
+userSchema.methods.redeemLoyaltyPoints = async function (
+  points,
+  description,
+  relatedId
+) {
+  if (this.loyaltyPoints < points) {
+    throw new Error("Insufficient loyalty points");
   }
-  throw new Error("Insufficient loyalty points");
+
+  this.loyaltyPoints -= points;
+
+  // Add to points history
+  this.pointsHistory.push({
+    amount: points,
+    type: "redeemed",
+    source: "reward",
+    description: description || "Points redeemed",
+    relatedId: relatedId,
+    createdAt: new Date(),
+  });
+
+  return this.save();
+};
+
+// Method to toggle favorite menu item
+userSchema.methods.toggleFavoriteMenuItem = async function (menuItemId) {
+  const index = this.favoriteMenuItems.indexOf(menuItemId);
+
+  if (index === -1) {
+    // Add to favorites
+    this.favoriteMenuItems.push(menuItemId);
+  } else {
+    // Remove from favorites
+    this.favoriteMenuItems.splice(index, 1);
+  }
+
+  return this.save();
+};
+
+// Method to toggle favorite gallery image
+userSchema.methods.toggleFavoriteGalleryImage = async function (imageId) {
+  const index = this.favoriteGalleryImages.indexOf(imageId);
+
+  if (index === -1) {
+    // Add to favorites
+    this.favoriteGalleryImages.push(imageId);
+  } else {
+    // Remove from favorites
+    this.favoriteGalleryImages.splice(index, 1);
+  }
+
+  return this.save();
 };
 
 // Static method to get user statistics

@@ -98,12 +98,12 @@ exports.getImageById = async (req, res) => {
     }
 
     // Increment view count
-    await image.incrementViews();
+    const updatedImage = await image.incrementViews();
 
     res.status(200).json({
       status: "success",
       data: {
-        image,
+        image: updatedImage,
       },
     });
   } catch (error) {
@@ -121,37 +121,111 @@ exports.getImageById = async (req, res) => {
 // @access  Private/Admin/Staff
 exports.uploadNewImage = async (req, res) => {
   try {
+    console.log("📤 Upload gallery image request received");
+    console.log("Body:", req.body);
+    console.log("Cloudinary Result:", req.cloudinaryResult);
+
     const { title, description, category, tags, isFeatured } = req.body;
 
-    if (!req.file) {
+    // Validate required fields
+    if (!req.cloudinaryResult) {
       return res.status(400).json({
         status: "error",
         message: "Please upload an image file",
       });
     }
 
-    // Upload to Cloudinary
-    const uploadResult = await uploadImage(req.file.path, "southbrews/gallery");
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) {
+      return res.status(400).json({
+        status: "error",
+        message: "Title is required",
+      });
+    }
 
-    // Create gallery entry
+    if (trimmedTitle.length < 3) {
+      return res.status(400).json({
+        status: "error",
+        message: "Title must be at least 3 characters long",
+      });
+    }
+
+    if (trimmedTitle.length > 100) {
+      return res.status(400).json({
+        status: "error",
+        message: "Title must not exceed 100 characters",
+      });
+    }
+
+    const trimmedDescription = description?.trim();
+    if (trimmedDescription && trimmedDescription.length > 500) {
+      return res.status(400).json({
+        status: "error",
+        message: "Description must not exceed 500 characters",
+      });
+    }
+
+    const validCategories = [
+      "interior",
+      "coffee",
+      "food",
+      "events",
+      "nature",
+      "people",
+      "other",
+    ];
+    const imageCategory = category || "other";
+    if (!validCategories.includes(imageCategory)) {
+      return res.status(400).json({
+        status: "error",
+        message: `Invalid category. Must be one of: ${validCategories.join(
+          ", "
+        )}`,
+      });
+    }
+
+    // Convert FormData string boolean to actual boolean
+    const featured =
+      typeof isFeatured === "string"
+        ? isFeatured === "true"
+        : Boolean(isFeatured);
+
+    // Process tags - handle both string and array formats
+    let processedTags = [];
+    if (tags) {
+      if (typeof tags === "string") {
+        processedTags = tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0);
+      } else if (Array.isArray(tags)) {
+        processedTags = tags
+          .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+          .filter((tag) => tag.length > 0);
+      }
+    }
+
+    // Create gallery entry using Cloudinary result from middleware
     const image = await Gallery.create({
-      title,
-      description,
-      category,
-      tags: tags ? tags.split(",").map((tag) => tag.trim()) : [],
-      url: uploadResult.secure_url,
-      cloudinaryId: uploadResult.public_id,
+      title: trimmedTitle,
+      description: trimmedDescription || "",
+      category: imageCategory,
+      tags: processedTags,
+      url: req.cloudinaryResult.secure_url || req.cloudinaryResult.url,
+      cloudinaryId: req.cloudinaryResult.public_id,
       uploadedBy: req.user.id,
-      isFeatured: isFeatured === "true",
+      isFeatured: featured,
       metadata: {
-        width: uploadResult.width,
-        height: uploadResult.height,
-        format: uploadResult.format,
-        size: uploadResult.bytes,
+        width: req.cloudinaryResult.width,
+        height: req.cloudinaryResult.height,
+        format: req.cloudinaryResult.format,
+        size: req.cloudinaryResult.bytes || 0,
       },
     });
 
     await image.populate("uploadedBy", "firstName lastName");
+
+    console.log("✅ Image uploaded successfully:", image._id);
 
     res.status(201).json({
       status: "success",
@@ -161,7 +235,17 @@ exports.uploadNewImage = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Upload image error:", error);
+    console.error("❌ Upload image error:", error);
+
+    // Handle specific errors
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        status: "error",
+        message: messages.join(", "),
+      });
+    }
+
     res.status(500).json({
       status: "error",
       message: "Failed to upload image",
@@ -178,6 +262,54 @@ exports.updateImage = async (req, res) => {
     const { title, description, category, tags, isFeatured, isActive } =
       req.body;
 
+    // Validate request
+    if (title !== undefined) {
+      const trimmedTitle = title.trim();
+      if (!trimmedTitle) {
+        return res.status(400).json({
+          status: "error",
+          message: "Title cannot be empty",
+        });
+      }
+      if (trimmedTitle.length < 3) {
+        return res.status(400).json({
+          status: "error",
+          message: "Title must be at least 3 characters long",
+        });
+      }
+      if (trimmedTitle.length > 100) {
+        return res.status(400).json({
+          status: "error",
+          message: "Title must not exceed 100 characters",
+        });
+      }
+    }
+
+    if (description !== undefined && description.length > 500) {
+      return res.status(400).json({
+        status: "error",
+        message: "Description must not exceed 500 characters",
+      });
+    }
+
+    const validCategories = [
+      "interior",
+      "coffee",
+      "food",
+      "events",
+      "nature",
+      "people",
+      "other",
+    ];
+    if (category && !validCategories.includes(category)) {
+      return res.status(400).json({
+        status: "error",
+        message: `Invalid category. Must be one of: ${validCategories.join(
+          ", "
+        )}`,
+      });
+    }
+
     let image = await Gallery.findById(req.params.id);
 
     if (!image) {
@@ -187,11 +319,32 @@ exports.updateImage = async (req, res) => {
       });
     }
 
-    // Update fields
-    if (title) image.title = title;
-    if (description !== undefined) image.description = description;
+    // Update fields with proper validation
+    if (title) image.title = title.trim();
+    if (description !== undefined) image.description = description.trim();
     if (category) image.category = category;
-    if (tags) image.tags = tags.split(",").map((tag) => tag.trim());
+
+    // Handle tags - support both string and array formats
+    if (tags !== undefined) {
+      if (Array.isArray(tags)) {
+        // Already an array - just filter and trim
+        image.tags = tags
+          .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+          .filter((tag) => tag.length > 0);
+      } else if (typeof tags === "string") {
+        // String format - split by comma
+        image.tags = tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0);
+      } else {
+        return res.status(400).json({
+          status: "error",
+          message: "Tags must be a string or array",
+        });
+      }
+    }
+
     if (isFeatured !== undefined)
       image.isFeatured = isFeatured === "true" || isFeatured === true;
     if (isActive !== undefined)
@@ -209,6 +362,23 @@ exports.updateImage = async (req, res) => {
     });
   } catch (error) {
     console.error("Update image error:", error);
+
+    // Handle specific errors
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        status: "error",
+        message: messages.join(", "),
+      });
+    }
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid image ID format",
+      });
+    }
+
     res.status(500).json({
       status: "error",
       message: "Failed to update image",
@@ -222,6 +392,14 @@ exports.updateImage = async (req, res) => {
 // @access  Private/Admin
 exports.deleteImage = async (req, res) => {
   try {
+    // Validate ID format
+    if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid image ID format",
+      });
+    }
+
     const image = await Gallery.findById(req.params.id);
 
     if (!image) {
@@ -233,21 +411,32 @@ exports.deleteImage = async (req, res) => {
 
     // Delete from Cloudinary
     try {
+      console.log(`🗑️ Deleting image from Cloudinary: ${image.cloudinaryId}`);
       await deleteImage(image.cloudinaryId);
+      console.log("✅ Cloudinary deletion successful");
     } catch (cloudinaryError) {
-      console.error("Cloudinary deletion error:", cloudinaryError);
+      console.error("❌ Cloudinary deletion error:", cloudinaryError);
       // Continue with database deletion even if Cloudinary fails
     }
 
     // Delete from database
     await Gallery.findByIdAndDelete(req.params.id);
+    console.log(`✅ Image deleted from database: ${req.params.id}`);
 
     res.status(200).json({
       status: "success",
       message: "Image deleted successfully",
     });
   } catch (error) {
-    console.error("Delete image error:", error);
+    console.error("❌ Delete image error:", error);
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid image ID format",
+      });
+    }
+
     res.status(500).json({
       status: "error",
       message: "Failed to delete image",
@@ -270,16 +459,16 @@ exports.toggleLike = async (req, res) => {
       });
     }
 
-    await image.toggleLike(req.user.id);
+    const updatedImage = await image.toggleLike(req.user.id);
 
     res.status(200).json({
       status: "success",
-      message: image.likes.includes(req.user.id)
+      message: updatedImage.likes.includes(req.user.id)
         ? "Image liked"
         : "Image unliked",
       data: {
-        likes: image.likeCount,
-        isLiked: image.likes.includes(req.user.id),
+        likes: updatedImage.likeCount,
+        isLiked: updatedImage.likes.includes(req.user.id),
       },
     });
   } catch (error) {
@@ -381,7 +570,11 @@ exports.getCategories = async (req, res) => {
           category,
           isActive: true,
         });
-        return { category, count };
+        return {
+          _id: category,
+          name: category.charAt(0).toUpperCase() + category.slice(1),
+          count,
+        };
       })
     );
 

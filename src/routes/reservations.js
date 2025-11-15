@@ -16,6 +16,8 @@ const {
   markNoShow,
   getTodayReservations,
   getAvailableSlots,
+  exportReservationsCSV,
+  deleteReservation,
 } = require("../controllers/reservationController");
 
 const { protect, isAdmin, isStaff } = require("../middleware/auth");
@@ -23,33 +25,53 @@ const { validateReservation } = require("../middleware/validation");
 
 const router = express.Router();
 
-// Public routes
+// ============================================
+// PUBLIC ROUTES (No authentication required)
+// ============================================
 router.get("/available-slots", getAvailableSlots);
 router.post("/check-availability", checkAvailability);
 
-// Protected routes
+// ============================================
+// PROTECTED ROUTES (Authentication required)
+// ============================================
 router.use(protect);
 
-// Customer routes
+// ============================================
+// CUSTOMER ROUTES
+// ============================================
 router.post("/", validateReservation, createReservation);
 router.get("/my-reservations", getMyReservations);
-router.get("/:id", getReservation);
-router.put("/:id", validateReservation, updateReservation);
-router.patch("/:id/cancel", cancelReservation);
 
-// Staff/Admin routes
+// ============================================
+// STAFF/ADMIN ROUTES
+// ============================================
 router.use(isStaff);
 
-router.get("/", getAllReservations);
+// IMPORTANT: Specific routes MUST come BEFORE parameterized routes (:id)
+// Admin only routes
+router.get("/export/csv", isAdmin, exportReservationsCSV);
+router.get("/admin/stats", isAdmin, getReservationStats);
+
+// Staff/Admin specific routes
 router.get("/today", getTodayReservations);
+router.get("/stats", getReservationStats); // This was being matched as /:id
+
+// General staff/admin routes - keep these before /:id
+router.get("/", getAllReservations);
+
+// ============================================
+// PARAMETERIZED ROUTES (MUST BE LAST)
+// ============================================
+// These routes use :id parameter, so they MUST come after specific routes
+router.get("/:id", getReservation);
+router.put("/:id", validateReservation, updateReservation);
+router.delete("/:id", isAdmin, deleteReservation);
+router.patch("/:id/cancel", cancelReservation);
 router.patch("/:id/confirm", confirmReservation);
 router.patch("/:id/checkin", checkInReservation);
 router.patch("/:id/complete", completeReservation);
 router.patch("/:id/no-show", markNoShow);
 router.post("/:id/notes", addReservationNote);
 router.post("/:id/send-reminder", sendReminderEmail);
-
-// Admin only routes
-router.get("/admin/stats", isAdmin, getReservationStats);
 
 module.exports = router;

@@ -84,7 +84,7 @@ const gallerySchema = new mongoose.Schema(
 
 // Virtual for like count
 gallerySchema.virtual("likeCount").get(function () {
-  return this.likes.length;
+  return this.likes ? this.likes.length : 0;
 });
 
 // Virtual for formatted upload date

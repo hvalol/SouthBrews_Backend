@@ -17,24 +17,63 @@ const createReservation = async (req, res, next) => {
       contactInfo,
     } = req.body;
 
+    // Combine date and time for validation
+    const [hours, minutes] = time.split(":").map(Number);
+    const reservationDateTime = new Date(date);
+    reservationDateTime.setHours(hours, minutes, 0, 0);
+
+    const now = new Date();
+
+    // Check if reservation datetime is in the future
+    if (reservationDateTime <= now) {
+      return res.status(400).json({
+        status: "error",
+        message: "Reservation date and time must be in the future",
+        errors: [
+          {
+            field: "dateTime",
+            message: `Please select a future date and time. Current time: ${now.toLocaleString()}`,
+          },
+        ],
+      });
+    }
+
+    // Check if reservation is at least 1 hour from now
+    const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+    if (reservationDateTime < oneHourFromNow) {
+      return res.status(400).json({
+        status: "error",
+        message: "Reservations must be made at least 1 hour in advance",
+        errors: [
+          {
+            field: "dateTime",
+            message: `Please select a time at least 1 hour from now. Current time: ${now.toLocaleString()}`,
+          },
+        ],
+      });
+    }
+
     // Check availability for the requested time slot
-    const isAvailable = await Reservation.checkAvailability(
+    const availabilityResult = await Reservation.checkAvailability(
       new Date(date),
       time,
       partySize
     );
 
-    if (!isAvailable) {
+    if (!availabilityResult.available) {
       return res.status(400).json({
         status: "error",
-        message:
-          "The requested time slot is not available. Please choose a different time.",
+        message: "The requested time slot is not available",
+        data: {
+          availabilityResult,
+          suggestion: "Please choose a different time or party size",
+        },
       });
     }
 
     // Create reservation
     const reservation = await Reservation.create({
-      user: req.user.id,
+      user: req.user?.id, // Optional for guest reservations
       date: new Date(date),
       time,
       partySize,
@@ -42,17 +81,24 @@ const createReservation = async (req, res, next) => {
       occasion,
       preferences,
       contactInfo: {
-        phone: contactInfo.phone || req.user.phone,
-        email: contactInfo.email || req.user.email,
+        name:
+          contactInfo.name ||
+          (req.user ? `${req.user.firstName} ${req.user.lastName}` : ""),
+        phone: contactInfo.phone || req.user?.phone,
+        email: contactInfo.email || req.user?.email,
       },
     });
 
-    // Populate user info
-    await reservation.populate("user", "firstName lastName email phone");
+    // Populate user info if available
+    if (req.user) {
+      await reservation.populate("user", "firstName lastName email phone");
 
-    // Add loyalty points for making reservation
-    const user = await User.findById(req.user.id);
-    await user.addLoyaltyPoints(10);
+      // Add loyalty points for making reservation
+      const user = await User.findById(req.user.id);
+      if (user) {
+        await user.addLoyaltyPoints(10);
+      }
+    }
 
     // Send confirmation email
     try {
@@ -64,14 +110,28 @@ const createReservation = async (req, res, next) => {
 
     res.status(201).json({
       status: "success",
-      message:
-        "Reservation created successfully! You earned 10 loyalty points.",
+      message: req.user
+        ? "Reservation created successfully! You earned 10 loyalty points."
+        : "Reservation created successfully!",
       data: {
         reservation,
       },
     });
   } catch (error) {
     console.error("Create reservation error:", error);
+
+    // Handle validation errors
+    if (error.name === "ValidationError") {
+      return res.status(400).json({
+        status: "error",
+        message: error.message || "Validation failed",
+        errors: Object.values(error.errors || {}).map((err) => ({
+          field: err.path,
+          message: err.message,
+        })),
+      });
+    }
+
     res.status(500).json({
       status: "error",
       message: "Failed to create reservation",
@@ -286,6 +346,17 @@ const cancelReservation = async (req, res, next) => {
       });
     }
 
+    // Populate user for email
+    await reservation.populate("user", "firstName lastName email phone");
+
+    // Ensure contactInfo.name exists for backwards compatibility
+    if (!reservation.contactInfo.name) {
+      reservation.contactInfo.name =
+        reservation.user?.firstName && reservation.user?.lastName
+          ? `${reservation.user.firstName} ${reservation.user.lastName}`
+          : "Guest";
+    }
+
     // Use the model method to cancel
     await reservation.cancel(reason, req.user.id);
 
@@ -307,7 +378,17 @@ const cancelReservation = async (req, res, next) => {
   } catch (error) {
     console.error("Cancel reservation error:", error);
 
-    if (error.message.includes("cannot be cancelled")) {
+    // Handle validation errors
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        status: "error",
+        message: messages.join(", "),
+      });
+    }
+
+    // Return specific error messages
+    if (error.message) {
       return res.status(400).json({
         status: "error",
         message: error.message,
@@ -426,13 +507,24 @@ const completeReservation = async (req, res, next) => {
 
     await reservation.complete();
 
-    // Award loyalty points for completing reservation
+    // Award loyalty points for completing reservation (20 points per reservation)
     const user = await User.findById(reservation.user);
-    await user.addLoyaltyPoints(20);
+    if (user) {
+      await user.addLoyaltyPoints(
+        20,
+        "reservation",
+        `Reservation completed on ${reservation.formattedDate}`,
+        reservation._id
+      );
+
+      // Update total reservations count
+      user.totalReservations = (user.totalReservations || 0) + 1;
+      await user.save();
+    }
 
     res.status(200).json({
       status: "success",
-      message: "Reservation completed successfully",
+      message: "Reservation completed successfully. 20 loyalty points awarded!",
       data: {
         reservation,
       },
@@ -507,6 +599,8 @@ const getAllReservations = async (req, res, next) => {
       page = 1,
       limit = 20,
       search,
+      startDate,
+      endDate,
     } = req.query;
 
     let query = {};
@@ -516,14 +610,67 @@ const getAllReservations = async (req, res, next) => {
       query.status = status;
     }
 
-    // Filter by date
+    // Filter by specific date (improved)
     if (date) {
       const searchDate = new Date(date);
-      const startOfDay = new Date(searchDate.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(searchDate.setHours(23, 59, 59, 999));
+      // Create start and end of day in UTC to avoid timezone issues
+      const startOfDay = new Date(
+        Date.UTC(
+          searchDate.getFullYear(),
+          searchDate.getMonth(),
+          searchDate.getDate(),
+          0,
+          0,
+          0,
+          0
+        )
+      );
+      const endOfDay = new Date(
+        Date.UTC(
+          searchDate.getFullYear(),
+          searchDate.getMonth(),
+          searchDate.getDate(),
+          23,
+          59,
+          59,
+          999
+        )
+      );
+
       query.date = {
         $gte: startOfDay,
         $lte: endOfDay,
+      };
+    }
+
+    // Filter by date range (for calendar view)
+    if (startDate && endDate && !date) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      query.date = {
+        $gte: new Date(
+          Date.UTC(
+            start.getFullYear(),
+            start.getMonth(),
+            start.getDate(),
+            0,
+            0,
+            0,
+            0
+          )
+        ),
+        $lte: new Date(
+          Date.UTC(
+            end.getFullYear(),
+            end.getMonth(),
+            end.getDate(),
+            23,
+            59,
+            59,
+            999
+          )
+        ),
       };
     }
 
@@ -549,12 +696,26 @@ const getAllReservations = async (req, res, next) => {
       .populate("user", "firstName lastName email phone")
       .sort({ date: 1, time: 1 })
       .skip(skip)
-      .limit(limitNum);
+      .limit(limitNum)
+      .lean(); // Use lean for better performance
+
+    // Add dateString to each reservation for frontend consistency
+    const reservationsWithDateString = reservations.map((res) => {
+      const d = new Date(res.date);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+
+      return {
+        ...res,
+        dateString: `${year}-${month}-${day}`,
+      };
+    });
 
     res.status(200).json({
       status: "success",
       data: {
-        reservations,
+        reservations: reservationsWithDateString,
         pagination: {
           currentPage: pageNum,
           totalPages: Math.ceil(total / limitNum),
@@ -851,6 +1012,187 @@ const getAvailableSlots = async (req, res, next) => {
   }
 };
 
+// @desc    Export reservations to CSV (Admin only)
+// @route   GET /api/reservations/export/csv
+// @access  Private (Admin)
+const exportReservationsCSV = async (req, res, next) => {
+  try {
+    const { status, date, startDate, endDate } = req.query;
+
+    let query = {};
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (date) {
+      const searchDate = new Date(date);
+      const startOfDay = new Date(searchDate.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(searchDate.setHours(23, 59, 59, 999));
+      query.date = {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      };
+    } else if (startDate && endDate) {
+      query.date = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+
+    const reservations = await Reservation.find(query)
+      .populate("user", "firstName lastName email phone")
+      .sort({ date: 1, time: 1 });
+
+    // Create CSV headers
+    const headers = [
+      "Reservation ID",
+      "Customer Name",
+      "Email",
+      "Phone",
+      "Date",
+      "Time",
+      "Party Size",
+      "Status",
+      "Occasion",
+      "Table Number",
+      "Special Requests",
+      "Created At",
+    ];
+
+    // Helper function to format date for CSV (short format)
+    const formatDateForCSV = (date) => {
+      const d = new Date(date);
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const year = d.getFullYear();
+      return `${month}/${day}/${year}`; // MM/DD/YYYY format
+    };
+
+    // Helper function to format datetime for CSV
+    const formatDateTimeForCSV = (date) => {
+      const d = new Date(date);
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const year = d.getFullYear();
+      const hours = String(d.getHours()).padStart(2, "0");
+      const minutes = String(d.getMinutes()).padStart(2, "0");
+      return `${month}/${day}/${year} ${hours}:${minutes}`; // MM/DD/YYYY HH:MM
+    };
+
+    // Helper function to escape CSV fields
+    const escapeCSVField = (field) => {
+      if (field === null || field === undefined) return "";
+      const str = String(field);
+      // If field contains comma, newline, or quotes, wrap in quotes and escape existing quotes
+      if (str.includes(",") || str.includes("\n") || str.includes('"')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    // Create CSV rows
+    const rows = reservations.map((res) => {
+      const customerName = res.user
+        ? `${res.user.firstName} ${res.user.lastName}`
+        : res.contactInfo.email;
+
+      return [
+        res._id.toString().substring(0, 8).toUpperCase(), // Short ID
+        escapeCSVField(customerName),
+        escapeCSVField(res.contactInfo.email),
+        escapeCSVField(res.contactInfo.phone),
+        formatDateForCSV(res.date), // Fixed date format
+        escapeCSVField(res.time),
+        res.partySize,
+        escapeCSVField(res.status),
+        escapeCSVField(res.occasion || "N/A"),
+        res.tableNumber || "N/A",
+        escapeCSVField(res.specialRequests || "N/A"),
+        formatDateTimeForCSV(res.createdAt), // Fixed datetime format
+      ].join(",");
+    });
+
+    // Convert to CSV string
+    const csvContent = [headers.join(","), ...rows].join("\n");
+
+    // Set headers for file download
+    const filename = `reservations-${
+      new Date().toISOString().split("T")[0]
+    }.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+    // Add UTF-8 BOM for Excel compatibility
+    const BOM = "\uFEFF";
+    res.status(200).send(BOM + csvContent);
+  } catch (error) {
+    console.error("Export CSV error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to export reservations",
+      ...(process.env.NODE_ENV === "development" && { error: error.message }),
+    });
+  }
+};
+
+// @desc    Delete reservation (Admin only - for completed/cancelled reservations)
+// @route   DELETE /api/reservations/:id
+// @access  Private (Admin only)
+const deleteReservation = async (req, res, next) => {
+  try {
+    const reservation = await Reservation.findById(req.params.id);
+
+    if (!reservation) {
+      return res.status(404).json({
+        status: "error",
+        message: "Reservation not found",
+      });
+    }
+
+    // Only allow deletion of completed, cancelled, or no-show reservations
+    if (!["completed", "cancelled", "no-show"].includes(reservation.status)) {
+      return res.status(400).json({
+        status: "error",
+        message: `Cannot delete ${reservation.status} reservations. Only completed, cancelled, or no-show reservations can be deleted.`,
+      });
+    }
+
+    await Reservation.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({
+      status: "success",
+      message: "Reservation deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete reservation error:", error);
+
+    // Handle validation errors
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        status: "error",
+        message: messages.join(", "),
+      });
+    }
+
+    // Handle CastError (invalid ID format)
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid reservation ID format",
+      });
+    }
+
+    res.status(500).json({
+      status: "error",
+      message: "Failed to delete reservation",
+      ...(process.env.NODE_ENV === "development" && { error: error.message }),
+    });
+  }
+};
+
 module.exports = {
   createReservation,
   getMyReservations,
@@ -868,4 +1210,6 @@ module.exports = {
   markNoShow,
   getTodayReservations,
   getAvailableSlots,
+  exportReservationsCSV,
+  deleteReservation,
 };

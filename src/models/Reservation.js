@@ -5,19 +5,11 @@ const reservationSchema = new mongoose.Schema(
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: [true, "User is required for reservation"],
+      required: false, // Allow guest reservations
     },
     date: {
       type: Date,
       required: [true, "Reservation date is required"],
-      validate: {
-        validator: function (value) {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          return value >= today;
-        },
-        message: "Reservation date cannot be in the past",
-      },
     },
     time: {
       type: String,
@@ -31,7 +23,7 @@ const reservationSchema = new mongoose.Schema(
       type: Number,
       required: [true, "Party size is required"],
       min: [1, "Party size must be at least 1"],
-      max: [12, "Party size cannot exceed 12 people"],
+      max: [20, "Party size cannot exceed 20 people"],
     },
     tableNumber: {
       type: Number,
@@ -55,6 +47,11 @@ const reservationSchema = new mongoose.Schema(
       default: "pending",
     },
     contactInfo: {
+      name: {
+        type: String,
+        required: [true, "Contact name is required"],
+        trim: true,
+      },
       phone: {
         type: String,
         required: [true, "Contact phone is required"],
@@ -112,6 +109,7 @@ const reservationSchema = new mongoose.Schema(
     confirmationCode: {
       type: String,
       unique: true,
+      sparse: true, // Allow null values
     },
     reminderSent: {
       type: Boolean,
@@ -147,10 +145,37 @@ const reservationSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
+    toJSON: {
+      virtuals: true,
+      transform: function (doc, ret) {
+        // Add dateString for easier frontend filtering
+        if (ret.date) {
+          const d = new Date(ret.date);
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, "0");
+          const day = String(d.getDate()).padStart(2, "0");
+          ret.dateString = `${year}-${month}-${day}`;
+        }
+        return ret;
+      },
+    },
     toObject: { virtuals: true },
   }
 );
+
+// ============================================
+// VIRTUALS
+// ============================================
+
+// Virtual for normalized date string (YYYY-MM-DD)
+reservationSchema.virtual("dateString").get(function () {
+  if (!this.date) return null;
+  const d = new Date(this.date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+});
 
 // Virtual for full date-time
 reservationSchema.virtual("dateTime").get(function () {
@@ -189,7 +214,45 @@ reservationSchema.virtual("formattedTime").get(function () {
   });
 });
 
-// Indexes for performance
+// Virtual for customer name (from contactInfo or user)
+reservationSchema.virtual("customerName").get(function () {
+  if (this.user && this.user.firstName && this.user.lastName) {
+    return `${this.user.firstName} ${this.user.lastName}`;
+  }
+  return "Guest";
+});
+
+// Virtual to check if reservation is today
+reservationSchema.virtual("isToday").get(function () {
+  if (!this.date) return false;
+  const today = new Date();
+  const resDate = new Date(this.date);
+  return (
+    resDate.getDate() === today.getDate() &&
+    resDate.getMonth() === today.getMonth() &&
+    resDate.getFullYear() === today.getFullYear()
+  );
+});
+
+// Virtual to check if reservation is upcoming
+reservationSchema.virtual("isUpcoming").get(function () {
+  if (!this.dateTime) return false;
+  return (
+    this.dateTime > new Date() &&
+    !["cancelled", "no-show"].includes(this.status)
+  );
+});
+
+// Virtual to check if reservation is past
+reservationSchema.virtual("isPast").get(function () {
+  if (!this.dateTime) return false;
+  return this.dateTime < new Date();
+});
+
+// ============================================
+// INDEXES
+// ============================================
+
 reservationSchema.index({ user: 1, date: 1 });
 reservationSchema.index({ date: 1, time: 1 });
 reservationSchema.index({ status: 1, date: 1 });
@@ -197,14 +260,59 @@ reservationSchema.index(
   { confirmationCode: 1 },
   { unique: true, sparse: true }
 );
+reservationSchema.index({ "contactInfo.email": 1 });
+reservationSchema.index({ "contactInfo.phone": 1 });
 
-// Pre-save middleware to generate confirmation code
+// ============================================
+// MIDDLEWARE
+// ============================================
+
+// Pre-save middleware to validate and generate confirmation code
 reservationSchema.pre("save", function (next) {
+  // Only validate on new reservations or when date/time is modified
+  if (this.isNew || this.isModified("date") || this.isModified("time")) {
+    try {
+      // Combine date and time to create full datetime
+      const [hours, minutes] = this.time.split(":").map(Number);
+      const reservationDateTime = new Date(this.date);
+      reservationDateTime.setHours(hours, minutes, 0, 0);
+
+      const now = new Date();
+
+      // Check if reservation datetime is in the past
+      if (reservationDateTime <= now) {
+        const error = new Error(
+          "Reservation date and time must be in the future"
+        );
+        error.name = "ValidationError";
+        return next(error);
+      }
+
+      // Check if reservation is at least 1 hour from now
+      const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+      if (reservationDateTime < oneHourFromNow) {
+        const error = new Error(
+          "Reservations must be made at least 1 hour in advance"
+        );
+        error.name = "ValidationError";
+        return next(error);
+      }
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  // Generate confirmation code if new reservation
   if (this.isNew && !this.confirmationCode) {
     this.confirmationCode = this.generateConfirmationCode();
   }
+
   next();
 });
+
+// ============================================
+// INSTANCE METHODS
+// ============================================
 
 // Method to generate confirmation code
 reservationSchema.methods.generateConfirmationCode = function () {
@@ -218,12 +326,15 @@ reservationSchema.methods.generateConfirmationCode = function () {
 
 // Method to check if reservation can be cancelled
 reservationSchema.methods.canBeCancelled = function () {
+  // Cannot cancel if already completed, cancelled, or no-show
   if (["completed", "cancelled", "no-show"].includes(this.status)) {
     return false;
   }
 
   // Allow cancellation up to 2 hours before reservation time
   const reservationDateTime = this.dateTime;
+  if (!reservationDateTime) return false;
+
   const now = new Date();
   const timeDiff = reservationDateTime - now;
 
@@ -232,8 +343,32 @@ reservationSchema.methods.canBeCancelled = function () {
 
 // Method to cancel reservation
 reservationSchema.methods.cancel = function (reason, cancelledBy) {
+  // Check if can be cancelled
   if (!this.canBeCancelled()) {
+    const reservationDateTime = this.dateTime;
+    const now = new Date();
+    const timeDiff = reservationDateTime - now;
+    const hoursUntil = Math.floor(timeDiff / (1000 * 60 * 60));
+
+    if (["completed", "cancelled", "no-show"].includes(this.status)) {
+      throw new Error(`Cannot cancel a ${this.status} reservation`);
+    }
+
+    if (timeDiff <= 2 * 60 * 60 * 1000) {
+      throw new Error(
+        `Cancellation must be made at least 2 hours in advance. Your reservation is in ${hoursUntil} hours.`
+      );
+    }
+
     throw new Error("Reservation cannot be cancelled at this time");
+  }
+
+  // Ensure contactInfo.name exists for backwards compatibility
+  if (!this.contactInfo.name) {
+    this.contactInfo.name =
+      this.user?.firstName && this.user?.lastName
+        ? `${this.user.firstName} ${this.user.lastName}`
+        : "Guest";
   }
 
   this.status = "cancelled";
@@ -279,6 +414,18 @@ reservationSchema.methods.complete = function () {
   return this.save();
 };
 
+// Method to mark as no-show
+reservationSchema.methods.markNoShow = function () {
+  if (!["pending", "confirmed"].includes(this.status)) {
+    throw new Error(
+      "Only pending or confirmed reservations can be marked as no-show"
+    );
+  }
+
+  this.status = "no-show";
+  return this.save();
+};
+
 // Method to add note
 reservationSchema.methods.addNote = function (content, addedBy) {
   this.notes.push({
@@ -290,70 +437,105 @@ reservationSchema.methods.addNote = function (content, addedBy) {
   return this.save();
 };
 
+// Method to check if reservation can be modified
+reservationSchema.methods.canBeModified = function () {
+  // Cannot modify if completed, cancelled, or no-show
+  if (["completed", "cancelled", "no-show"].includes(this.status)) {
+    return false;
+  }
+
+  // Allow modification up to 2 hours before reservation time
+  const reservationDateTime = this.dateTime;
+  if (!reservationDateTime) return false;
+
+  const now = new Date();
+  const timeDiff = reservationDateTime - now;
+
+  return timeDiff > 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+};
+
+// ============================================
+// STATIC METHODS
+// ============================================
+
 // Static method to check availability for a specific time slot
 reservationSchema.statics.checkAvailability = async function (
   date,
   time,
   partySize
 ) {
-  // Normalize the date to start of day
-  const reservationDate = new Date(date);
-  reservationDate.setHours(0, 0, 0, 0);
+  try {
+    // Normalize the date to start of day in UTC
+    const reservationDate = new Date(date);
+    const startOfDay = new Date(
+      Date.UTC(
+        reservationDate.getFullYear(),
+        reservationDate.getMonth(),
+        reservationDate.getDate(),
+        0,
+        0,
+        0,
+        0
+      )
+    );
 
-  const nextDay = new Date(reservationDate);
-  nextDay.setDate(nextDay.getDate() + 1);
+    const endOfDay = new Date(
+      Date.UTC(
+        reservationDate.getFullYear(),
+        reservationDate.getMonth(),
+        reservationDate.getDate(),
+        23,
+        59,
+        59,
+        999
+      )
+    );
 
-  // Get all reservations for that day with conflicting status
-  const existingReservations = await this.find({
-    date: {
-      $gte: reservationDate,
-      $lt: nextDay,
-    },
-    status: { $in: ["pending", "confirmed", "seated"] },
-  });
+    // Get all reservations for that day with active status
+    const existingReservations = await this.find({
+      date: {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      },
+      status: { $in: ["pending", "confirmed", "seated"] },
+    });
 
-  // Parse the requested time
-  const [requestedHours, requestedMinutes] = time.split(":").map(Number);
-  const requestedTimeInMinutes = requestedHours * 60 + requestedMinutes;
+    // Parse the requested time
+    const [requestedHours, requestedMinutes] = time.split(":").map(Number);
+    const requestedTimeInMinutes = requestedHours * 60 + requestedMinutes;
 
-  // Check for time slot conflicts (90-minute dining window)
-  const DINING_DURATION = 90; // minutes
+    // Check for time slot conflicts (90-minute dining window)
+    const DINING_DURATION = 90; // minutes
 
-  for (const reservation of existingReservations) {
-    const [existingHours, existingMinutes] = reservation.time
-      .split(":")
-      .map(Number);
-    const existingTimeInMinutes = existingHours * 60 + existingMinutes;
+    // Calculate capacity during the requested time slot
+    const maxCapacity = 50; // Total restaurant capacity
+    const reservedCapacity = existingReservations
+      .filter((res) => {
+        const [resHours, resMinutes] = res.time.split(":").map(Number);
+        const resTimeInMinutes = resHours * 60 + resMinutes;
+        const timeDiff = Math.abs(resTimeInMinutes - requestedTimeInMinutes);
+        return timeDiff < DINING_DURATION; // Within dining window
+      })
+      .reduce((total, res) => total + res.partySize, 0);
 
-    // Check if times overlap (considering 90-minute duration)
-    const requestedStart = requestedTimeInMinutes;
-    const requestedEnd = requestedTimeInMinutes + DINING_DURATION;
-    const existingStart = existingTimeInMinutes;
-    const existingEnd = existingTimeInMinutes + DINING_DURATION;
+    const isAvailable = reservedCapacity + partySize <= maxCapacity;
 
-    // If times overlap, check capacity
-    if (
-      (requestedStart >= existingStart && requestedStart < existingEnd) ||
-      (requestedEnd > existingStart && requestedEnd <= existingEnd) ||
-      (requestedStart <= existingStart && requestedEnd >= existingEnd)
-    ) {
-      // Times overlap - you can add more sophisticated logic here
-      // For now, we'll use a simple capacity check
-    }
+    return {
+      available: isAvailable,
+      remainingCapacity: Math.max(0, maxCapacity - reservedCapacity),
+      reservedCapacity,
+      maxCapacity,
+      conflictingReservations: existingReservations.filter((res) => {
+        const [resHours, resMinutes] = res.time.split(":").map(Number);
+        const resTimeInMinutes = resHours * 60 + resMinutes;
+        const timeDiff = Math.abs(resTimeInMinutes - requestedTimeInMinutes);
+        return timeDiff < DINING_DURATION;
+      }).length,
+    };
+  } catch (error) {
+    console.error("Error checking availability:", error);
+    throw error;
   }
-
-  // Simple availability check based on total capacity
-  const maxCapacity = 50; // Total restaurant capacity
-  const reservedCapacity = existingReservations
-    .filter((res) => {
-      const [resHours, resMinutes] = res.time.split(":").map(Number);
-      const resTimeInMinutes = resHours * 60 + resMinutes;
-      const timeDiff = Math.abs(resTimeInMinutes - requestedTimeInMinutes);
-      return timeDiff < DINING_DURATION; // Within dining window
-    })
-    .reduce((total, res) => total + res.partySize, 0);
-
-  return reservedCapacity + partySize <= maxCapacity;
 };
 
 // Static method to get reservation statistics
@@ -361,9 +543,32 @@ reservationSchema.statics.getStats = async function (startDate, endDate) {
   const matchStage = {};
 
   if (startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
     matchStage.date = {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate),
+      $gte: new Date(
+        Date.UTC(
+          start.getFullYear(),
+          start.getMonth(),
+          start.getDate(),
+          0,
+          0,
+          0,
+          0
+        )
+      ),
+      $lte: new Date(
+        Date.UTC(
+          end.getFullYear(),
+          end.getMonth(),
+          end.getDate(),
+          23,
+          59,
+          59,
+          999
+        )
+      ),
     };
   }
 
@@ -373,9 +578,19 @@ reservationSchema.statics.getStats = async function (startDate, endDate) {
       $group: {
         _id: null,
         totalReservations: { $sum: 1 },
+        pendingReservations: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "pending"] }, 1, 0],
+          },
+        },
         confirmedReservations: {
           $sum: {
             $cond: [{ $eq: ["$status", "confirmed"] }, 1, 0],
+          },
+        },
+        seatedReservations: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "seated"] }, 1, 0],
           },
         },
         completedReservations: {
@@ -402,7 +617,9 @@ reservationSchema.statics.getStats = async function (startDate, endDate) {
   return (
     stats[0] || {
       totalReservations: 0,
+      pendingReservations: 0,
       confirmedReservations: 0,
+      seatedReservations: 0,
       completedReservations: 0,
       cancelledReservations: 0,
       noShowReservations: 0,
@@ -410,6 +627,144 @@ reservationSchema.statics.getStats = async function (startDate, endDate) {
       averagePartySize: 0,
     }
   );
+};
+
+// Static method to get today's reservations
+reservationSchema.statics.getTodayReservations = async function () {
+  const today = new Date();
+  const startOfDay = new Date(
+    Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0)
+  );
+
+  const endOfDay = new Date(
+    Date.UTC(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate(),
+      23,
+      59,
+      59,
+      999
+    )
+  );
+
+  return this.find({
+    date: {
+      $gte: startOfDay,
+      $lte: endOfDay,
+    },
+  })
+    .populate("user", "firstName lastName email phone")
+    .sort({ time: 1 });
+};
+
+// Static method to get upcoming reservations for a user
+reservationSchema.statics.getUserUpcomingReservations = async function (
+  userId
+) {
+  const now = new Date();
+
+  return this.find({
+    user: userId,
+    date: { $gte: now },
+    status: { $in: ["pending", "confirmed"] },
+  })
+    .sort({ date: 1, time: 1 })
+    .limit(10);
+};
+
+// Static method to get reservations by date range
+reservationSchema.statics.getByDateRange = async function (startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  return this.find({
+    date: {
+      $gte: new Date(
+        Date.UTC(
+          start.getFullYear(),
+          start.getMonth(),
+          start.getDate(),
+          0,
+          0,
+          0,
+          0
+        )
+      ),
+      $lte: new Date(
+        Date.UTC(
+          end.getFullYear(),
+          end.getMonth(),
+          end.getDate(),
+          23,
+          59,
+          59,
+          999
+        )
+      ),
+    },
+  })
+    .populate("user", "firstName lastName email phone")
+    .sort({ date: 1, time: 1 });
+};
+
+// Static method to get available time slots for a date
+reservationSchema.statics.getAvailableSlots = async function (date, partySize) {
+  const operatingHours = {
+    start: "11:00", // 11 AM
+    end: "21:00", // 9 PM
+  };
+
+  const slotInterval = 30; // minutes
+  const slots = [];
+
+  // Generate all possible time slots
+  let [currentHour, currentMinute] = operatingHours.start
+    .split(":")
+    .map(Number);
+  const [endHour, endMinute] = operatingHours.end.split(":").map(Number);
+
+  while (
+    currentHour < endHour ||
+    (currentHour === endHour && currentMinute <= endMinute)
+  ) {
+    const timeSlot = `${String(currentHour).padStart(2, "0")}:${String(
+      currentMinute
+    ).padStart(2, "0")}`;
+
+    // Check availability for this slot
+    const availability = await this.checkAvailability(
+      date,
+      timeSlot,
+      partySize
+    );
+
+    slots.push({
+      time: timeSlot,
+      available: availability.available,
+      remainingCapacity: availability.remainingCapacity,
+      formattedTime: new Date(
+        2000,
+        0,
+        1,
+        currentHour,
+        currentMinute
+      ).toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }),
+    });
+
+    // Increment time
+    currentMinute += slotInterval;
+    if (currentMinute >= 60) {
+      currentHour++;
+      currentMinute = 0;
+    }
+  }
+
+  return slots;
 };
 
 module.exports = mongoose.model("Reservation", reservationSchema);
