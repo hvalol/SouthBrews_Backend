@@ -39,10 +39,24 @@ const createTransporter = async () => {
     } else {
       // Ethereal Email (Testing) - Auto-generate test account
       try {
-        const testAccount = await nodemailer.createTestAccount();
-        console.log("📧 Ethereal Email Test Account Created:");
+        console.log("📧 Creating Ethereal Email test account...");
+
+        // Add timeout for Ethereal account creation
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(
+            () => reject(new Error("Ethereal account creation timeout")),
+            5000
+          );
+        });
+
+        const accountPromise = nodemailer.createTestAccount();
+        const testAccount = await Promise.race([
+          accountPromise,
+          timeoutPromise,
+        ]);
+
+        console.log("✅ Ethereal Email Test Account Created:");
         console.log("   User:", testAccount.user);
-        console.log("   Pass:", testAccount.pass);
         console.log("   Preview emails at: https://ethereal.email");
 
         return nodemailer.createTransport({
@@ -53,19 +67,31 @@ const createTransporter = async () => {
             user: testAccount.user,
             pass: testAccount.pass,
           },
+          connectionTimeout: 5000, // 5 second connection timeout
+          greetingTimeout: 5000, // 5 second greeting timeout
         });
       } catch (error) {
-        console.error("Failed to create Ethereal test account:", error);
-        // Fallback to basic config
-        return nodemailer.createTransport({
-          host: "smtp.ethereal.email",
-          port: 587,
-          secure: false,
-          auth: {
-            user: "ethereal.user@ethereal.email",
-            pass: "ethereal.pass",
+        console.error(
+          "⚠️ Failed to create Ethereal test account:",
+          error.message
+        );
+        console.log(
+          "📧 Using mock email transporter (emails will not be sent)"
+        );
+
+        // Return a mock transporter that doesn't actually send emails
+        return {
+          sendMail: async (mailOptions) => {
+            console.log("📧 Mock email would be sent:");
+            console.log("   To:", mailOptions.to);
+            console.log("   Subject:", mailOptions.subject);
+            return {
+              messageId: `mock-${Date.now()}@localhost`,
+              accepted: [mailOptions.to],
+              rejected: [],
+            };
           },
-        });
+        };
       }
     }
   }

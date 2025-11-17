@@ -500,37 +500,91 @@ reservationSchema.statics.checkAvailability = async function (
       status: { $in: ["pending", "confirmed", "seated"] },
     });
 
+    // Get capacity settings
+    const Settings = require("./Settings");
+    let settings = await Settings.findOne();
+    let maxCapacity = 50;
+    let diningDuration = 90;
+    let blockedDates = [];
+    let blockedSlots = new Map();
+    let slotCapacityOverrides = new Map();
+
+    if (settings && settings.reservations) {
+      maxCapacity = settings.reservations.maxCapacity || 50;
+      diningDuration = settings.reservations.diningDuration || 90;
+      blockedDates = settings.reservations.blockedDates || [];
+      blockedSlots = settings.reservations.blockedSlots || new Map();
+      slotCapacityOverrides =
+        settings.reservations.slotCapacityOverrides || new Map();
+    }
+
+    // Check if date is blocked
+    const dateString = new Date(date).toISOString().split("T")[0];
+    const isDateBlocked = blockedDates.some(
+      (d) => new Date(d).toISOString().split("T")[0] === dateString
+    );
+
+    if (isDateBlocked) {
+      return {
+        available: false,
+        remainingCapacity: 0,
+        reservedCapacity: 0,
+        maxCapacity: 0,
+        conflictingReservations: 0,
+        message: "This date is blocked for reservations",
+        blocked: true,
+      };
+    }
+
+    // Check if specific slot is blocked
+    const blockedTimesForDate = blockedSlots.get(dateString) || [];
+    if (blockedTimesForDate.includes(time)) {
+      return {
+        available: false,
+        remainingCapacity: 0,
+        reservedCapacity: 0,
+        maxCapacity: 0,
+        conflictingReservations: 0,
+        message: "This time slot is blocked for reservations",
+        blocked: true,
+      };
+    }
+
+    // Check for capacity override for this specific slot
+    const slotKey = `${dateString}_${time}`;
+    const slotMaxCapacity =
+      slotCapacityOverrides.get(slotKey) !== undefined
+        ? slotCapacityOverrides.get(slotKey)
+        : maxCapacity;
+
     // Parse the requested time
     const [requestedHours, requestedMinutes] = time.split(":").map(Number);
     const requestedTimeInMinutes = requestedHours * 60 + requestedMinutes;
 
-    // Check for time slot conflicts (90-minute dining window)
-    const DINING_DURATION = 90; // minutes
-
     // Calculate capacity during the requested time slot
-    const maxCapacity = 50; // Total restaurant capacity
     const reservedCapacity = existingReservations
       .filter((res) => {
         const [resHours, resMinutes] = res.time.split(":").map(Number);
         const resTimeInMinutes = resHours * 60 + resMinutes;
         const timeDiff = Math.abs(resTimeInMinutes - requestedTimeInMinutes);
-        return timeDiff < DINING_DURATION; // Within dining window
+        return timeDiff < diningDuration; // Within dining window
       })
       .reduce((total, res) => total + res.partySize, 0);
 
-    const isAvailable = reservedCapacity + partySize <= maxCapacity;
+    const isAvailable = reservedCapacity + partySize <= slotMaxCapacity;
 
     return {
       available: isAvailable,
-      remainingCapacity: Math.max(0, maxCapacity - reservedCapacity),
+      remainingCapacity: Math.max(0, slotMaxCapacity - reservedCapacity),
       reservedCapacity,
-      maxCapacity,
+      maxCapacity: slotMaxCapacity,
       conflictingReservations: existingReservations.filter((res) => {
         const [resHours, resMinutes] = res.time.split(":").map(Number);
         const resTimeInMinutes = resHours * 60 + resMinutes;
         const timeDiff = Math.abs(resTimeInMinutes - requestedTimeInMinutes);
-        return timeDiff < DINING_DURATION;
+        return timeDiff < diningDuration;
       }).length,
+      blocked: false,
     };
   } catch (error) {
     console.error("Error checking availability:", error);

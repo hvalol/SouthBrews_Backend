@@ -33,10 +33,6 @@ const settingsSchema = new mongoose.Schema(
         type: String,
         default: "http://utak.io/store/southsidebrews",
       },
-      storeWebsiteUrl: {
-        type: String,
-        default: "",
-      },
       description: {
         type: String,
         maxlength: 500,
@@ -140,6 +136,83 @@ const settingsSchema = new mongoose.Schema(
       linkedin: { type: String },
     },
 
+    // Reservation Settings
+    reservations: {
+      maxCapacity: {
+        type: Number,
+        default: 50,
+        min: 1,
+        max: 500,
+      },
+      diningDuration: {
+        type: Number,
+        default: 90,
+        min: 30,
+        max: 180,
+      },
+      enableReservations: {
+        type: Boolean,
+        default: true,
+      },
+      minPartySize: {
+        type: Number,
+        default: 1,
+        min: 1,
+      },
+      maxPartySize: {
+        type: Number,
+        default: 20,
+        min: 1,
+        max: 50,
+      },
+      minAdvanceBooking: {
+        type: Number,
+        default: 1,
+        min: 0,
+      },
+      maxAdvanceBooking: {
+        type: Number,
+        default: 60,
+        min: 1,
+      },
+      timeSlots: {
+        type: [String],
+        default: [
+          "11:00",
+          "11:30",
+          "12:00",
+          "12:30",
+          "13:00",
+          "13:30",
+          "14:00",
+          "14:30",
+          "17:00",
+          "17:30",
+          "18:00",
+          "18:30",
+          "19:00",
+          "19:30",
+          "20:00",
+          "20:30",
+          "21:00",
+        ],
+      },
+      slotCapacityOverrides: {
+        type: Map,
+        of: Number,
+        default: new Map(),
+      },
+      blockedDates: {
+        type: [Date],
+        default: [],
+      },
+      blockedSlots: {
+        type: Map,
+        of: [String],
+        default: new Map(),
+      },
+    },
+
     // Metadata
     lastUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -164,7 +237,6 @@ settingsSchema.statics.getSingleton = async function () {
         address: "123 Mountain View Road, Forest Hills, CA 90210",
         website: "www.southsidebrews.com",
         onlineStoreUrl: "https://utak.ph/store/southsidebrews",
-        storeWebsiteUrl: "",
         description:
           "A cozy mountain cafe serving artisanal coffee and fresh pastries.",
       },

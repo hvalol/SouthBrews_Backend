@@ -77,36 +77,58 @@ exports.submitContactForm = async (req, res) => {
 
     console.log(`✅ Contact message received from: ${email}`);
 
-    // Send confirmation email to customer
-    try {
-      await emailService.sendEmail({
-        to: email,
-        subject: "We received your message - South Side Brews",
-        html: `
-          <h2>Thank you for contacting us!</h2>
-          <p>Dear ${name},</p>
-          <p>We have received your message and will get back to you within 24 hours.</p>
-          <p><strong>Your message:</strong></p>
-          <p>${message}</p>
-          <br>
-          <p>Best regards,<br>South Side Brews Team</p>
-        `,
-      });
-    } catch (emailError) {
-      console.error("❌ Failed to send confirmation email:", emailError);
-      // Don't fail the request if email fails
-    }
-
+    // Respond immediately to client
     res.status(201).json({
       status: "success",
       message:
-        "Your message has been sent successfully. We'll respond within 24 hours.",
+        "Your message has been sent successfully. We'll respond within 24-48 hours.",
       data: {
         id: contactMessage._id,
         name: contactMessage.name,
         email: contactMessage.email,
         subject: contactMessage.subject,
+        createdAt: contactMessage.createdAt,
       },
+    });
+
+    // Send emails asynchronously (don't await - fire and forget)
+    // This prevents timeout issues while still sending emails
+    setImmediate(async () => {
+      // Send confirmation email to customer
+      try {
+        await emailService.sendContactConfirmation({
+          name: contactMessage.name,
+          email: contactMessage.email,
+          phone: contactMessage.phone,
+          subject: contactMessage.subject,
+          message: contactMessage.message,
+        });
+        console.log(`📧 Confirmation email sent to customer: ${email}`);
+      } catch (emailError) {
+        console.error(
+          "❌ Failed to send confirmation email to customer:",
+          emailError
+        );
+      }
+
+      // Send notification email to business
+      try {
+        await emailService.sendContactNotification({
+          name: contactMessage.name,
+          email: contactMessage.email,
+          phone: contactMessage.phone,
+          subject: contactMessage.subject,
+          message: contactMessage.message,
+          _id: contactMessage._id,
+          createdAt: contactMessage.createdAt,
+        });
+        console.log(`📧 Notification email sent to business`);
+      } catch (emailError) {
+        console.error(
+          "❌ Failed to send notification email to business:",
+          emailError
+        );
+      }
     });
   } catch (error) {
     console.error("❌ Submit contact form error:", error);
@@ -255,25 +277,29 @@ exports.replyToMessage = async (req, res) => {
 
     await message.save();
 
+    // Populate repliedBy to get staff name
+    await message.populate("repliedBy", "firstName lastName");
+
     // Send reply email to customer
     try {
-      await emailService.sendEmail({
-        to: message.email,
-        subject: `Re: ${message.subject} - South Side Brews`,
-        html: `
-          <h2>Response to Your Message</h2>
-          <p>Dear ${message.name},</p>
-          <p>${reply}</p>
-          <br>
-          <p><strong>Your original message:</strong></p>
-          <p>${message.message}</p>
-          <br>
-          <p>Best regards,<br>South Side Brews Team</p>
-        `,
-      });
+      const staffName = message.repliedBy
+        ? `${message.repliedBy.firstName} ${message.repliedBy.lastName}`
+        : null;
+
+      await emailService.sendContactReply(
+        {
+          name: message.name,
+          email: message.email,
+          subject: message.subject,
+          message: message.message,
+        },
+        reply.trim(),
+        staffName
+      );
       console.log(`✅ Reply sent to: ${message.email}`);
     } catch (emailError) {
       console.error("❌ Failed to send reply email:", emailError);
+      // Don't fail the request if email fails
     }
 
     res.status(200).json({

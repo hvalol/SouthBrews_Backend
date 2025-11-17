@@ -515,6 +515,285 @@ South Side Brews | 123 Coffee Street, Brew City, BC 12345
       text,
     });
   }
+
+  /**
+   * Send contact form confirmation to customer
+   */
+  async sendContactConfirmation({ name, email, phone, subject, message }) {
+    // Get settings for business info
+    const settings = await this.getSettings();
+    const businessName = settings?.general?.businessName || "South Side Brews";
+    const businessPhone = settings?.general?.phone || "+1 (555) 123-4567";
+    const businessEmail = settings?.general?.email || "info@southsidebrews.com";
+    const businessAddress =
+      settings?.general?.address ||
+      "123 Mountain View Road, Forest Hills, CA 90210";
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; margin: 0; padding: 0; }
+          .container { max-width: 600px; margin: 0 auto; background: white; }
+          .header { background: linear-gradient(135deg, #2D5016 0%, #3a6b1e 100%); color: white; padding: 40px 30px; text-align: center; }
+          .logo { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+          .header h1 { margin: 0 0 10px 0; font-size: 32px; }
+          .header p { margin: 0; font-size: 16px; opacity: 0.95; }
+          .content { padding: 40px 30px; background: #ffffff; }
+          .greeting { font-size: 18px; color: #2D5016; margin-bottom: 20px; }
+          .message-box { background: #f8f9fa; padding: 25px; border-radius: 12px; margin: 25px 0; border-left: 4px solid #2D5016; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          .detail-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #e0e0e0; }
+          .detail-row:last-child { border-bottom: none; }
+          .detail-label { font-weight: 600; color: #2D5016; }
+          .detail-value { color: #333; font-weight: 500; }
+          .contact-info { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 25px 0; }
+          .contact-info p { margin: 8px 0; }
+          .footer { background: #2D5016; color: white; text-align: center; padding: 30px; }
+          .footer p { margin: 8px 0; opacity: 0.9; }
+          .footer a { color: #D4A574; text-decoration: none; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">☕ ${businessName}</div>
+            <h1>Message Received!</h1>
+            <p>We've got your message and we'll be in touch soon</p>
+          </div>
+          <div class="content">
+            <p class="greeting">Hello ${name},</p>
+            <p>Thank you for reaching out to ${businessName}! We've received your message and our team will respond within 24-48 hours.</p>
+            
+            <div class="message-box">
+              <h3 style="margin-top: 0; color: #2D5016; font-size: 20px;">📧 Your Message Summary</h3>
+              <div class="detail-row">
+                <span class="detail-label">Subject:</span>
+                <span class="detail-value">${subject}</span>
+              </div>
+              ${
+                phone
+                  ? `
+              <div class="detail-row">
+                <span class="detail-label">Phone:</span>
+                <span class="detail-value">${phone}</span>
+              </div>
+              `
+                  : ""
+              }
+              <div class="detail-row">
+                <span class="detail-label">Your Message:</span>
+                <span class="detail-value" style="white-space: pre-wrap;">${message}</span>
+              </div>
+            </div>
+
+            <div class="contact-info">
+              <h3 style="color: #2D5016; margin-top: 0;">Need Immediate Assistance?</h3>
+              <p><strong>📞 Phone:</strong> <a href="tel:${businessPhone.replace(
+                /\D/g,
+                ""
+              )}" style="color: #2D5016; text-decoration: none;">${businessPhone}</a></p>
+              <p><strong>📧 Email:</strong> <a href="mailto:${businessEmail}" style="color: #2D5016; text-decoration: none;">${businessEmail}</a></p>
+              <p style="font-size: 14px; color: #666; margin-top: 12px;">Our team is available during business hours to assist you.</p>
+            </div>
+
+            <p style="margin-top: 30px; color: #666;">We appreciate you taking the time to contact us!</p>
+            <p style="color: #2D5016; font-weight: 600; font-size: 16px;">The ${businessName} Team</p>
+          </div>
+          <div class="footer">
+            <p style="font-size: 16px; font-weight: 600; margin-bottom: 15px;">${businessName}</p>
+            <p>📍 ${businessAddress}</p>
+            <p>📞 ${businessPhone} | 📧 ${businessEmail}</p>
+            <p style="margin-top: 20px; font-size: 13px;">© ${new Date().getFullYear()} ${businessName}. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+${businessName}
+Message Received!
+
+Hello ${name},
+
+Thank you for reaching out to ${businessName}! We've received your message and our team will respond within 24-48 hours.
+
+YOUR MESSAGE SUMMARY:
+Subject: ${subject}${phone ? `\nPhone: ${phone}` : ""}
+Your Message: ${message}
+
+NEED IMMEDIATE ASSISTANCE?
+Phone: ${businessPhone}
+Email: ${businessEmail}
+
+We appreciate you taking the time to contact us!
+
+The ${businessName} Team
+${businessName} | ${businessAddress}
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: `Message Received - ${businessName}`,
+      html,
+      text,
+    });
+  }
+
+  /**
+   * Send contact form notification to business
+   */
+  async sendContactNotification({
+    name,
+    email,
+    phone,
+    subject,
+    message,
+    _id,
+    createdAt,
+  }) {
+    // Get settings for business info
+    const settings = await this.getSettings();
+    const businessName = settings?.general?.businessName || "South Side Brews";
+    const businessEmail = settings?.general?.email || "info@southsidebrews.com";
+
+    const formattedDate = new Date(createdAt).toLocaleString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; margin: 0; padding: 0; }
+          .container { max-width: 600px; margin: 0 auto; background: white; }
+          .header { background: linear-gradient(135deg, #d32f2f 0%, #c62828 100%); color: white; padding: 40px 30px; text-align: center; }
+          .logo { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+          .header h1 { margin: 0 0 10px 0; font-size: 32px; }
+          .header p { margin: 0; font-size: 16px; opacity: 0.95; }
+          .content { padding: 40px 30px; background: #ffffff; }
+          .alert-box { background: #fff3cd; padding: 20px; border-radius: 8px; border-left: 4px solid #D4A574; margin: 25px 0; }
+          .customer-details { background: #f8f9fa; padding: 25px; border-radius: 12px; margin: 25px 0; border-left: 4px solid #d32f2f; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          .detail-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #e0e0e0; }
+          .detail-row:last-child { border-bottom: none; }
+          .detail-label { font-weight: 600; color: #d32f2f; }
+          .detail-value { color: #333; font-weight: 500; }
+          .message-content { background: #fff; padding: 20px; border-radius: 8px; border: 2px solid #e0e0e0; margin: 20px 0; white-space: pre-wrap; }
+          .button { display: inline-block; background: #d32f2f; color: white; padding: 14px 35px; text-decoration: none; border-radius: 8px; margin: 20px 0; font-weight: 600; }
+          .footer { background: #2D5016; color: white; text-align: center; padding: 30px; }
+          .footer p { margin: 8px 0; opacity: 0.9; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">📧 ${businessName}</div>
+            <h1>New Contact Form Submission</h1>
+            <p>A customer has sent you a message</p>
+          </div>
+          <div class="content">
+            <div class="alert-box">
+              <strong style="color: #8B4513; display: block; margin-bottom: 8px; font-size: 16px;">⚡ Action Required</strong>
+              <p style="margin: 5px 0; font-size: 14px; color: #666;">Please respond to this customer inquiry within 24-48 hours to maintain excellent customer service.</p>
+            </div>
+
+            <div class="customer-details">
+              <h3 style="margin-top: 0; color: #d32f2f; font-size: 20px;">👤 Customer Information</h3>
+              <div class="detail-row">
+                <span class="detail-label">Name:</span>
+                <span class="detail-value">${name}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Email:</span>
+                <span class="detail-value"><a href="mailto:${email}" style="color: #2D5016; text-decoration: none;">${email}</a></span>
+              </div>
+              ${
+                phone
+                  ? `
+              <div class="detail-row">
+                <span class="detail-label">Phone:</span>
+                <span class="detail-value"><a href="tel:${phone.replace(
+                  /\D/g,
+                  ""
+                )}" style="color: #2D5016; text-decoration: none;">${phone}</a></span>
+              </div>
+              `
+                  : ""
+              }
+              <div class="detail-row">
+                <span class="detail-label">Subject:</span>
+                <span class="detail-value">${subject}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Received:</span>
+                <span class="detail-value">${formattedDate}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Message ID:</span>
+                <span class="detail-value">#${_id
+                  .toString()
+                  .slice(-8)
+                  .toUpperCase()}</span>
+              </div>
+            </div>
+
+            <h3 style="color: #d32f2f;">💬 Customer Message:</h3>
+            <div class="message-content">${message}</div>
+
+            <div style="text-align: center; margin-top: 30px;">
+              <a href="mailto:${email}?subject=Re: ${encodeURIComponent(
+      subject
+    )}" class="button">Reply to Customer</a>
+            </div>
+
+            <p style="margin-top: 30px; color: #666; font-size: 14px; text-align: center;">This is an automated notification from your contact form system.</p>
+          </div>
+          <div class="footer">
+            <p style="font-size: 16px; font-weight: 600; margin-bottom: 15px;">${businessName} - Admin Notification</p>
+            <p style="margin-top: 20px; font-size: 13px;">© ${new Date().getFullYear()} ${businessName}. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+${businessName}
+New Contact Form Submission
+
+CUSTOMER INFORMATION:
+Name: ${name}
+Email: ${email}${phone ? `\nPhone: ${phone}` : ""}
+Subject: ${subject}
+Received: ${formattedDate}
+Message ID: #${_id.toString().slice(-8).toUpperCase()}
+
+CUSTOMER MESSAGE:
+${message}
+
+Please respond to this customer inquiry within 24-48 hours.
+
+Reply directly to: ${email}
+
+This is an automated notification from your contact form system.
+${businessName}
+    `;
+
+    return this.sendEmail({
+      to: businessEmail,
+      subject: `New Contact Form: ${subject} - From ${name}`,
+      html,
+      text,
+    });
+  }
 }
 
 // Export singleton instance

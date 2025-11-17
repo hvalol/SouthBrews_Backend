@@ -27,6 +27,7 @@ const menuItemSchema = new mongoose.Schema(
         values: [
           "coffee",
           "tea",
+          "frappe",
           "pastries",
           "sandwiches",
           "salads",

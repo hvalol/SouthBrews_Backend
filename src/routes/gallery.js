@@ -25,14 +25,14 @@ router.get("/popular", getPopularImages);
 router.get("/", getAllImages);
 router.get("/:id", getImageById);
 
-// Protected routes - User
+// Like functionality - can be accessed without auth or with auth
+router.post("/:id/like", protect, toggleLike); // Keep protect for now to track user likes
+
+// Protected routes - Admin stats
+router.get("/admin/stats", protect, isAdmin, getGalleryStats);
+
+// Staff/Admin routes - Upload, update, delete
 router.use(protect);
-router.post("/:id/like", toggleLike);
-
-// Admin routes - Must come before isStaff middleware
-router.get("/admin/stats", isAdmin, getGalleryStats);
-
-// Staff/Admin routes
 router.use(isStaff);
 router.post(
   "/",

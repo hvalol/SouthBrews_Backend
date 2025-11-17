@@ -747,7 +747,7 @@ const checkAvailability = async (req, res, next) => {
       });
     }
 
-    const isAvailable = await Reservation.checkAvailability(
+    const availabilityInfo = await Reservation.checkAvailability(
       new Date(date),
       time,
       parseInt(partySize, 10)
@@ -756,10 +756,13 @@ const checkAvailability = async (req, res, next) => {
     res.status(200).json({
       status: "success",
       data: {
-        available: isAvailable,
+        ...availabilityInfo,
         date,
         time,
-        partySize,
+        partySize: parseInt(partySize, 10),
+        message: availabilityInfo.available
+          ? "Time slot is available"
+          : `Only ${availabilityInfo.remainingCapacity} seats available for this time slot`,
       },
     });
   } catch (error) {
@@ -948,6 +951,8 @@ const getAvailableSlots = async (req, res, next) => {
   try {
     const { date, partySize } = req.query;
 
+    console.log("📅 getAvailableSlots called with:", { date, partySize });
+
     if (!date || !partySize) {
       return res.status(400).json({
         status: "error",
@@ -957,6 +962,15 @@ const getAvailableSlots = async (req, res, next) => {
 
     const requestedDate = new Date(date);
     const size = parseInt(partySize);
+
+    console.log("📅 Parsed date:", requestedDate, "Party size:", size);
+
+    if (size < 1 || size > 20) {
+      return res.status(400).json({
+        status: "error",
+        message: "Party size must be between 1 and 20",
+      });
+    }
 
     // Define available time slots (customize as needed)
     const allSlots = [
@@ -979,18 +993,52 @@ const getAvailableSlots = async (req, res, next) => {
       "21:00",
     ];
 
-    // Check availability for each slot
-    const availableSlots = [];
+    // Check availability for each slot with detailed information
+    const slotsWithAvailability = [];
     for (const slot of allSlots) {
-      const isAvailable = await Reservation.checkAvailability(
+      const availabilityInfo = await Reservation.checkAvailability(
         requestedDate,
         slot,
         size
       );
-      if (isAvailable) {
-        availableSlots.push(slot);
-      }
+
+      console.log(`🔍 Slot ${slot} availability:`, {
+        available: availabilityInfo.available,
+        remainingCapacity: availabilityInfo.remainingCapacity,
+        reservedCapacity: availabilityInfo.reservedCapacity,
+        maxCapacity: availabilityInfo.maxCapacity,
+        blocked: availabilityInfo.blocked,
+      });
+
+      slotsWithAvailability.push({
+        time: slot,
+        available: availabilityInfo.available,
+        remainingCapacity: availabilityInfo.remainingCapacity,
+        reservedCapacity: availabilityInfo.reservedCapacity,
+        conflictingReservations: availabilityInfo.conflictingReservations,
+        blocked: availabilityInfo.blocked || false,
+      });
     }
+
+    const availableSlots = slotsWithAvailability
+      .filter((slot) => slot.available)
+      .map((slot) => slot.time);
+
+    console.log(
+      "✅ Total available slots:",
+      availableSlots.length,
+      "out of",
+      allSlots.length
+    );
+    console.log(
+      "📊 Summary:",
+      slotsWithAvailability.map(
+        (s) =>
+          `${s.time}: ${s.available ? "AVAILABLE" : "FULL"} (${
+            s.remainingCapacity
+          } left)`
+      )
+    );
 
     res.status(200).json({
       status: "success",
@@ -998,8 +1046,10 @@ const getAvailableSlots = async (req, res, next) => {
         date: date,
         partySize: size,
         availableSlots,
+        slotsDetail: slotsWithAvailability,
         totalSlots: allSlots.length,
         availableCount: availableSlots.length,
+        maxCapacity: 50,
       },
     });
   } catch (error) {
@@ -1193,6 +1243,325 @@ const deleteReservation = async (req, res, next) => {
   }
 };
 
+// @desc    Get reservation capacity settings
+// @route   GET /api/reservations/capacity/settings
+// @access  Private/Staff
+const getCapacitySettings = async (req, res, next) => {
+  try {
+    const Settings = require("../models/Settings");
+    const settings = await Settings.findOne();
+
+    if (!settings || !settings.reservations) {
+      return res.status(200).json({
+        status: "success",
+        data: {
+          maxCapacity: 50,
+          diningDuration: 90,
+          enableReservations: true,
+          minPartySize: 1,
+          maxPartySize: 20,
+          minAdvanceBooking: 1,
+          maxAdvanceBooking: 60,
+          timeSlots: [
+            "11:00",
+            "11:30",
+            "12:00",
+            "12:30",
+            "13:00",
+            "13:30",
+            "14:00",
+            "14:30",
+            "17:00",
+            "17:30",
+            "18:00",
+            "18:30",
+            "19:00",
+            "19:30",
+            "20:00",
+            "20:30",
+            "21:00",
+          ],
+          slotCapacityOverrides: {},
+          blockedDates: [],
+          blockedSlots: {},
+        },
+      });
+    }
+
+    const capacitySettings = {
+      maxCapacity: settings.reservations.maxCapacity,
+      diningDuration: settings.reservations.diningDuration,
+      enableReservations: settings.reservations.enableReservations,
+      minPartySize: settings.reservations.minPartySize,
+      maxPartySize: settings.reservations.maxPartySize,
+      minAdvanceBooking: settings.reservations.minAdvanceBooking,
+      maxAdvanceBooking: settings.reservations.maxAdvanceBooking,
+      timeSlots: settings.reservations.timeSlots,
+      slotCapacityOverrides: Object.fromEntries(
+        settings.reservations.slotCapacityOverrides || new Map()
+      ),
+      blockedDates: settings.reservations.blockedDates,
+      blockedSlots: Object.fromEntries(
+        settings.reservations.blockedSlots || new Map()
+      ),
+    };
+
+    res.status(200).json({
+      status: "success",
+      data: capacitySettings,
+    });
+  } catch (error) {
+    console.error("Get capacity settings error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to get capacity settings",
+    });
+  }
+};
+
+// @desc    Update reservation capacity settings
+// @route   PUT /api/reservations/capacity/settings
+// @access  Private/Admin
+const updateCapacitySettings = async (req, res, next) => {
+  try {
+    const Settings = require("../models/Settings");
+    const {
+      maxCapacity,
+      diningDuration,
+      enableReservations,
+      minPartySize,
+      maxPartySize,
+      minAdvanceBooking,
+      maxAdvanceBooking,
+      timeSlots,
+    } = req.body;
+
+    let settings = await Settings.findOne();
+    if (!settings) {
+      settings = await Settings.create({
+        general: {
+          businessName: "South Side Brews",
+          email: "info@southsidebrews.com",
+          phone: "(555) 123-4567",
+          address: "123 Coffee Street, City, State 12345",
+        },
+      });
+    }
+
+    if (!settings.reservations) {
+      settings.reservations = {};
+    }
+
+    if (maxCapacity !== undefined)
+      settings.reservations.maxCapacity = maxCapacity;
+    if (diningDuration !== undefined)
+      settings.reservations.diningDuration = diningDuration;
+    if (enableReservations !== undefined)
+      settings.reservations.enableReservations = enableReservations;
+    if (minPartySize !== undefined)
+      settings.reservations.minPartySize = minPartySize;
+    if (maxPartySize !== undefined)
+      settings.reservations.maxPartySize = maxPartySize;
+    if (minAdvanceBooking !== undefined)
+      settings.reservations.minAdvanceBooking = minAdvanceBooking;
+    if (maxAdvanceBooking !== undefined)
+      settings.reservations.maxAdvanceBooking = maxAdvanceBooking;
+    if (timeSlots !== undefined) settings.reservations.timeSlots = timeSlots;
+
+    settings.lastUpdatedBy = req.user.id;
+    await settings.save();
+
+    res.status(200).json({
+      status: "success",
+      message: "Capacity settings updated successfully",
+      data: {
+        maxCapacity: settings.reservations.maxCapacity,
+        diningDuration: settings.reservations.diningDuration,
+        enableReservations: settings.reservations.enableReservations,
+        minPartySize: settings.reservations.minPartySize,
+        maxPartySize: settings.reservations.maxPartySize,
+        minAdvanceBooking: settings.reservations.minAdvanceBooking,
+        maxAdvanceBooking: settings.reservations.maxAdvanceBooking,
+        timeSlots: settings.reservations.timeSlots,
+      },
+    });
+  } catch (error) {
+    console.error("Update capacity settings error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to update capacity settings",
+    });
+  }
+};
+
+// @desc    Set capacity override for specific slot
+// @route   PUT /api/reservations/capacity/slot-override
+// @access  Private/Admin
+const setSlotCapacityOverride = async (req, res, next) => {
+  try {
+    const Settings = require("../models/Settings");
+    const { date, time, capacity } = req.body;
+
+    if (!date || !time) {
+      return res.status(400).json({
+        status: "error",
+        message: "Date and time are required",
+      });
+    }
+
+    const slotKey = `${date}_${time}`;
+    let settings = await Settings.findOne();
+
+    if (!settings) {
+      return res.status(404).json({
+        status: "error",
+        message: "Settings not found",
+      });
+    }
+
+    if (!settings.reservations) {
+      settings.reservations = {};
+    }
+
+    if (!settings.reservations.slotCapacityOverrides) {
+      settings.reservations.slotCapacityOverrides = new Map();
+    }
+
+    if (capacity === null || capacity === undefined) {
+      // Remove override
+      settings.reservations.slotCapacityOverrides.delete(slotKey);
+    } else {
+      // Set override
+      settings.reservations.slotCapacityOverrides.set(slotKey, capacity);
+    }
+
+    settings.lastUpdatedBy = req.user.id;
+    await settings.save();
+
+    res.status(200).json({
+      status: "success",
+      message:
+        capacity === null || capacity === undefined
+          ? "Slot capacity override removed"
+          : "Slot capacity override set successfully",
+      data: {
+        date,
+        time,
+        capacity: capacity === null || capacity === undefined ? null : capacity,
+        slotKey,
+      },
+    });
+  } catch (error) {
+    console.error("Set slot capacity override error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to set slot capacity override",
+    });
+  }
+};
+
+// @desc    Block/Unblock specific date or time slot
+// @route   PUT /api/reservations/capacity/block-slot
+// @access  Private/Admin
+const blockSlot = async (req, res, next) => {
+  try {
+    const Settings = require("../models/Settings");
+    const { date, time, block } = req.body;
+
+    if (!date) {
+      return res.status(400).json({
+        status: "error",
+        message: "Date is required",
+      });
+    }
+
+    let settings = await Settings.findOne();
+
+    if (!settings) {
+      return res.status(404).json({
+        status: "error",
+        message: "Settings not found",
+      });
+    }
+
+    if (!settings.reservations) {
+      settings.reservations = {};
+    }
+
+    if (time) {
+      // Block specific time slot on a date
+      if (!settings.reservations.blockedSlots) {
+        settings.reservations.blockedSlots = new Map();
+      }
+
+      const blockedTimes = settings.reservations.blockedSlots.get(date) || [];
+
+      if (block) {
+        if (!blockedTimes.includes(time)) {
+          blockedTimes.push(time);
+        }
+      } else {
+        const index = blockedTimes.indexOf(time);
+        if (index > -1) {
+          blockedTimes.splice(index, 1);
+        }
+      }
+
+      if (blockedTimes.length > 0) {
+        settings.reservations.blockedSlots.set(date, blockedTimes);
+      } else {
+        settings.reservations.blockedSlots.delete(date);
+      }
+    } else {
+      // Block entire date
+      if (!settings.reservations.blockedDates) {
+        settings.reservations.blockedDates = [];
+      }
+
+      const dateObj = new Date(date);
+      const existingIndex = settings.reservations.blockedDates.findIndex(
+        (d) =>
+          d.toISOString().split("T")[0] === dateObj.toISOString().split("T")[0]
+      );
+
+      if (block) {
+        if (existingIndex === -1) {
+          settings.reservations.blockedDates.push(dateObj);
+        }
+      } else {
+        if (existingIndex > -1) {
+          settings.reservations.blockedDates.splice(existingIndex, 1);
+        }
+      }
+    }
+
+    settings.lastUpdatedBy = req.user.id;
+    await settings.save();
+
+    res.status(200).json({
+      status: "success",
+      message: block
+        ? time
+          ? "Time slot blocked successfully"
+          : "Date blocked successfully"
+        : time
+        ? "Time slot unblocked successfully"
+        : "Date unblocked successfully",
+      data: {
+        date,
+        time,
+        blocked: block,
+      },
+    });
+  } catch (error) {
+    console.error("Block slot error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to block/unblock slot",
+    });
+  }
+};
+
 module.exports = {
   createReservation,
   getMyReservations,
@@ -1212,4 +1581,8 @@ module.exports = {
   getAvailableSlots,
   exportReservationsCSV,
   deleteReservation,
+  getCapacitySettings,
+  updateCapacitySettings,
+  setSlotCapacityOverride,
+  blockSlot,
 };
