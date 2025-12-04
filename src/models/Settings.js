@@ -240,6 +240,12 @@ settingsSchema.statics.getSingleton = async function () {
         description:
           "A cozy mountain cafe serving artisanal coffee and fresh pastries.",
       },
+      socialMedia: {
+        facebook: "https://www.facebook.com/southsidebrewscafelb",
+        instagram: "https://www.instagram.com/ssbrews_lb/",
+        twitter: "",
+        linkedin: "",
+      },
     });
   }
   return settings;
